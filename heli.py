@@ -123,7 +123,7 @@ class BrightnessApp(App):
 
     def compose(self) -> ComposeResult:
         yield Header(show_clock=False)
-        yield Static("☀  Gamma Brightness", id="title")
+        yield Static("☀  heli", id="title")
         yield Label("", id="pct")
         yield Label("", id="desc")
         yield GammaBar()
