@@ -78,6 +78,16 @@ else
     wait $PID && ok "textual installed" || die "pip install failed — run: pip install --user textual"
 fi
 
+if python3 -c "import astral" 2>/dev/null; then
+    ok "astral already installed"
+else
+    info "Installing astral via pip…"
+    python3 -m pip install --user --quiet astral &
+    PID=$!
+    spinner $PID "Installing astral…"
+    wait $PID && ok "astral installed" || die "pip install failed — run: pip install --user astral"
+fi
+
 # ── copy files ────────────────────────────────────────────────────────────────
 printf "\n${W}  Installing heli…${N}\n"
 
