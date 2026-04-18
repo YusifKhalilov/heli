@@ -1,6 +1,6 @@
 # heli ☀
 
-Display control for Hyprland — brightness, color temperature, saturation, contrast, and Day/Night presets with auto-switching based on local sunrise/sunset.
+A display control instrument that explores and pushes the limits of your monitor's capabilities — brightness, color temperature, saturation, contrast, and Day/Night presets with auto-switching based on local sunrise/sunset.
 
 ## install
 
