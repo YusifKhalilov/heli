@@ -1,6 +1,12 @@
 # heli ☀
 
-A display control instrument that explores and pushes the limits of your monitor's capabilities — brightness, color temperature, saturation, contrast, and Day/Night presets with auto-switching based on local sunrise/sunset.
+TUI that explores and pushes the limits of your monitor's capabilities — brightness, color temperature, saturation, contrast, and Day/Night presets with auto-switching based on local sunrise/sunset.
+
+## requirements
+
+- Hyprland
+- `hyprsunset`
+- Python 3.9+ + `textual` + `astral` (installed automatically)
 
 ## install
 
@@ -21,7 +27,7 @@ That's it. Type `heli` to open.
 | `R` | reset all sliders |
 | `d` *(Presets tab)* | save current values as Day preset |
 | `n` *(Presets tab)* | save current values as Night preset |
-| `q` | quit |
+| `q` | quit
 
 ## features
 
@@ -32,9 +38,3 @@ That's it. Type `heli` to open.
 - **Day / Night presets** — one key to save, auto-switches at local sunrise/sunset
 - **City search** — type a city in the Presets tab to set your location (offline, no API needed)
 - Persists all settings across reboots
-
-## requirements
-
-- Hyprland
-- `hyprsunset`
-- Python 3.9+ + `textual` + `astral` (installed automatically)
