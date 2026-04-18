@@ -5,7 +5,7 @@ Gamma brightness control for Hyprland. Lives in your terminal, saves your settin
 ## install
 
 ```bash
-curl -fsSL https://raw.githubusercontent.com/YusifKhalilov/heli/main/install.sh | bash
+curl -fsSL https://raw.githubusercontent.com/YusifKhalilov/heli/master/install.sh | bash
 ```
 
 That's it. Type `heli` to open.

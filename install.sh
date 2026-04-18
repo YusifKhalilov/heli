@@ -83,7 +83,7 @@ printf "\n${W}  Installing heli…${N}\n"
 
 SHARE="$HOME/.local/share/heli"
 BIN="$HOME/.local/bin"
-RAW="https://raw.githubusercontent.com/YusifKhalilov/heli/main"
+RAW="https://raw.githubusercontent.com/YusifKhalilov/heli/master"
 
 mkdir -p "$SHARE" "$BIN"
 
