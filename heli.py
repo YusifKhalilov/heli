@@ -529,7 +529,7 @@ class HeliApp(App):
         rows = self._slider_rows()
         self._focus_slider((self._focused_slider_idx - 1) % len(rows))
 
-    def on_slider_row_focus(self, event) -> None:
+    def on_descendant_focus(self, event) -> None:
         rows = self._slider_rows()
         for i, row in enumerate(rows):
             if row is event.widget:
