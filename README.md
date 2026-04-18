@@ -1,5 +1,7 @@
 # heli ☀
 
+<p align="center"><img src="src/heli.png" width="400" alt="heli display control"/></p>
+
 TUI that explores and pushes the limits of your monitor's capabilities — brightness, color temperature, saturation, contrast, and Day/Night presets with auto-switching based on local sunrise/sunset.
 
 ## requirements
