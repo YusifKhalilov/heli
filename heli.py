@@ -12,8 +12,7 @@ from pathlib import Path
 from textual.app import App, ComposeResult
 from textual.binding import Binding
 from textual.reactive import reactive
-from textual.widgets import Footer, Header, Input, Label, ListItem, ListView, Static
-from textual.widgets import TabbedContent, TabPane
+from textual.widgets import Input, Label, ListItem, ListView, Static
 from textual.containers import Horizontal, Vertical
 from textual import work
 from textual.worker import get_current_worker
@@ -26,46 +25,40 @@ TEMP_MIN,     TEMP_MAX,     TEMP_STEP     = 1000, 20000, 100
 SAT_MIN,      SAT_MAX,      SAT_STEP      = 0,   200,   5
 CONTRAST_MIN, CONTRAST_MAX, CONTRAST_STEP = -50, 50,    5
 
+SLIDER_DEFS = [
+    ("gamma",       "Brightness",  GAMMA_MIN,    GAMMA_MAX,    GAMMA_STEP,    "#f5c542"),
+    ("temperature", "Temperature", TEMP_MIN,     TEMP_MAX,     TEMP_STEP,     "#e8813a"),
+    ("saturation",  "Saturation",  SAT_MIN,      SAT_MAX,      SAT_STEP,      "#b04dc8"),
+    ("contrast",    "Contrast",    CONTRAST_MIN, CONTRAST_MAX, CONTRAST_STEP, "#4d9de0"),
+]
+
 DEFAULTS: dict = {
-    "gamma": 100,
-    "temperature": 6000,
-    "saturation": 100,
-    "contrast": 0,
-    "city": "",
-    "lat": None,
-    "lon": None,
+    "gamma":        100,
+    "temperature":  6000,
+    "saturation":   100,
+    "contrast":     0,
+    "city":         "",
+    "lat":          None,
+    "lon":          None,
+    "auto_switch":  True,
     "presets": {
         "day":   {"gamma": 100, "temperature": 6500, "saturation": 100, "contrast": 0},
         "night": {"gamma": 110, "temperature": 3200, "saturation": 80,  "contrast": -10},
     },
 }
 
-TAB_COLORS = {
-    "brightness":  "#f5c542",
-    "temperature": "#e8813a",
-    "saturation":  "#b04dc8",
-    "contrast":    "#4d9de0",
-    "presets":     "#3db87a",
-}
-
-_TAB_KEYS = {
-    "brightness":  ("gamma",       GAMMA_MIN,    GAMMA_MAX,    GAMMA_STEP),
-    "temperature": ("temperature", TEMP_MIN,     TEMP_MAX,     TEMP_STEP),
-    "saturation":  ("saturation",  SAT_MIN,      SAT_MAX,      SAT_STEP),
-    "contrast":    ("contrast",    CONTRAST_MIN, CONTRAST_MAX, CONTRAST_STEP),
-    "presets":     None,
-}
-
 CHEATSHEET = (
-    "1-5 tabs  ·  ←/→ or h/l adjust  ·  r reset  ·  R reset all  ·  Tab next  ·  q quit"
+    "j/k focus  h/l adjust  r reset  R reset all  d/n save preset  p apply  a toggle auto  q quit"
 )
+
 
 # ── PERSISTENCE ───────────────────────────────────────────────────────────────
 def load_settings() -> dict:
     try:
         raw = json.loads(CONFIG.read_text())
         merged = copy.deepcopy(DEFAULTS)
-        for k in ("gamma", "temperature", "saturation", "contrast", "city", "lat", "lon"):
+        for k in ("gamma", "temperature", "saturation", "contrast",
+                  "city", "lat", "lon", "auto_switch"):
             if k in raw:
                 merged[k] = raw[k]
         if "presets" in raw and isinstance(raw["presets"], dict):
@@ -130,11 +123,12 @@ def city_search(query: str) -> list[tuple[str, str, float, float]]:
     results = []
     try:
         db = astral_db()
-        for name, group in db._db.items():
-            entries = group if isinstance(group, list) else [group]
-            for loc in entries:
-                if q in loc.name.lower() or q in loc.region.lower():
-                    results.append((loc.name, loc.region, loc.latitude, loc.longitude))
+        for continent in db.values():
+            for locs in continent.values():
+                entries = locs if isinstance(locs, list) else [locs]
+                for loc in entries:
+                    if q in loc.name.lower() or q in loc.region.lower():
+                        results.append((loc.name, loc.region, loc.latitude, loc.longitude))
     except Exception:
         pass
     return results[:10]
@@ -185,6 +179,26 @@ def apply_preset(s: dict, which: str) -> dict:
     return {**s, **p}
 
 
+def _fmt_preset(p: dict) -> str:
+    return f"g{p['gamma']} {p['temperature']}K s{p['saturation']} c{p['contrast']:+d}"
+
+
+# ── HELPERS ───────────────────────────────────────────────────────────────────
+def _describe_gamma(val: int) -> str:
+    if val <= 100: return "Normal"
+    if val <= 130: return "Comfortable"
+    if val <= 170: return "Bright"
+    return "Maximum"
+
+
+def _fmt_slider_val(key: str, val) -> str:
+    if key == "gamma":       return f"{val}%  {_describe_gamma(val)}"
+    if key == "temperature": return f"{val} K"
+    if key == "saturation":  return f"{val}%"
+    if key == "contrast":    return f"{val:+d}"
+    return str(val)
+
+
 # ── WIDGETS ───────────────────────────────────────────────────────────────────
 class SliderBar(Static):
     value   : reactive[float] = reactive(0.0)
@@ -195,92 +209,180 @@ class SliderBar(Static):
     def render(self) -> str:
         span = max(self.max_val - self.min_val, 1)
         ratio = (self.value - self.min_val) / span
-        filled = round(max(0.0, min(1.0, ratio)) * 40)
-        bar = "█" * filled + "░" * (40 - filled)
-        return f"[dim]▕[/dim][{self.accent}]{bar}[/{self.accent}][dim]▏[/dim]"
+        filled = round(max(0.0, min(1.0, ratio)) * 32)
+        bar = "#" * filled + "." * (32 - filled)
+        return f"[{self.accent}][{bar}][/{self.accent}]"
+
+
+class SliderRow(Static, can_focus=True):
+    COMPONENT_CLASSES = {"slider-row--focused"}
+
+    key: str = ""
+    accent: str = "#ffffff"
+
+    def __init__(self, key: str, label: str, mn: float, mx: float,
+                 step: float, accent: str, **kw):
+        super().__init__(**kw)
+        self.key = key
+        self._label = label
+        self._mn = mn
+        self._mx = mx
+        self._step = step
+        self.accent = accent
+
+    def compose(self) -> ComposeResult:
+        yield Label(" ", id=f"focus-{self.key}", classes="focus-indicator")
+        yield Label(self._label, classes="slider-name")
+        yield SliderBar(id=f"bar-{self.key}")
+        yield Label("", id=f"val-{self.key}", classes="slider-val")
+
+    def on_focus(self) -> None:
+        try:
+            self.query_one(f"#focus-{self.key}", Label).update(">")
+        except Exception:
+            pass
+
+    def on_blur(self) -> None:
+        try:
+            self.query_one(f"#focus-{self.key}", Label).update(" ")
+        except Exception:
+            pass
+
+    def update_display(self, val: float, s: dict) -> None:
+        try:
+            bar = self.query_one(f"#bar-{self.key}", SliderBar)
+            bar.min_val = float(self._mn)
+            bar.max_val = float(self._mx)
+            bar.value   = float(val)
+            bar.accent  = self.accent
+            self.query_one(f"#val-{self.key}", Label).update(_fmt_slider_val(self.key, val))
+        except Exception:
+            pass
 
 
 # ── APP ───────────────────────────────────────────────────────────────────────
 class HeliApp(App):
     CSS = """
-    Screen { background: $surface; }
-
-    TabbedContent { height: 1fr; }
-
-    /* Per-tab accent on tab labels */
-    TabbedContent Tab#--content-tab-brightness  { color: #f5c542; }
-    TabbedContent Tab#--content-tab-temperature { color: #e8813a; }
-    TabbedContent Tab#--content-tab-saturation  { color: #b04dc8; }
-    TabbedContent Tab#--content-tab-contrast    { color: #4d9de0; }
-    TabbedContent Tab#--content-tab-presets     { color: #3db87a; }
-    TabbedContent Tab.-active { text-style: bold underline; }
-
-    /* Slider pane layout */
-    .slider-pane {
-        align: center middle;
-        padding: 1 4;
+    Screen {
+        background: $surface;
     }
-    .val-label {
-        text-align: center;
+
+    #main {
+        padding: 1 3;
+    }
+
+    #app-title {
         text-style: bold;
-        width: 100%;
-        padding: 0 0 1 0;
-    }
-    .note-label {
-        text-align: center;
-        color: $text-muted;
-        width: 100%;
-        padding: 1 0 0 0;
-    }
-    SliderBar {
-        text-align: center;
-        width: 100%;
+        color: $text;
         padding: 0 0 1 0;
     }
 
-    /* Presets tab */
-    .presets-pane {
-        padding: 1 4;
-    }
-    .preset-row {
-        height: 3;
+    /* Slider rows */
+    SliderRow {
+        height: 1;
+        layout: horizontal;
         margin-bottom: 1;
     }
-    .preset-label {
-        width: 16;
-        color: $text-muted;
-        padding: 1 0 0 0;
+
+    SliderRow:focus {
+        background: $surface-lighten-1;
     }
+
+    .focus-indicator {
+        width: 2;
+        color: $accent;
+        text-style: bold;
+    }
+
+    .slider-name {
+        width: 14;
+        color: $text-muted;
+    }
+
+    SliderBar {
+        width: 1fr;
+        padding: 0 1;
+    }
+
+    .slider-val {
+        width: 22;
+        text-align: right;
+        color: $text;
+    }
+
+    /* Presets section */
+    #presets-section {
+        margin-top: 1;
+        border-top: solid $surface-lighten-2;
+        padding-top: 1;
+    }
+
+    #presets-row {
+        height: auto;
+        margin-bottom: 1;
+    }
+
+    .preset-item {
+        margin-right: 3;
+        color: $text-muted;
+    }
+
     .preset-val {
         color: $text;
-        padding: 1 0 0 0;
+        margin-right: 3;
     }
-    .preset-btn {
-        width: 14;
+
+    #preset-keys {
+        color: $text-muted;
         margin-left: 2;
     }
-    #city-input {
-        width: 50%;
+
+    /* City section */
+    #city-section {
         margin-top: 1;
-        border: solid $accent;
+        border-top: solid $surface-lighten-2;
+        padding-top: 1;
     }
-    #city-results {
-        height: 8;
-        overflow-y: auto;
-        margin-top: 1;
-        width: 60%;
+
+    #city-row {
+        height: 3;
+        align: left middle;
+    }
+
+    #city-label {
+        width: 6;
+        color: $text-muted;
+        padding: 0 1 0 0;
+    }
+
+    #city-input {
+        width: 40;
         border: solid $surface-lighten-2;
     }
+
+    #city-input:focus {
+        border: solid $accent;
+    }
+
+    #city-results {
+        margin-top: 0;
+        width: 60;
+        max-height: 6;
+        border: solid $surface-lighten-2;
+        margin-left: 6;
+    }
+
     #location-status {
         color: $text-muted;
         margin-top: 1;
     }
+
     #astral-missing {
         color: $error;
         margin-top: 1;
     }
 
-    /* Cheatsheet footer */
+    /* Cheatsheet */
     #cheatsheet {
         dock: bottom;
         height: 1;
@@ -292,145 +394,105 @@ class HeliApp(App):
     """
 
     BINDINGS = [
-        Binding("tab",   "next_tab",              "Next tab",    show=False, priority=True),
-        Binding("1",     "goto_tab('brightness')",  "Brightness"),
-        Binding("2",     "goto_tab('temperature')", "Temperature"),
-        Binding("3",     "goto_tab('saturation')",  "Saturation"),
-        Binding("4",     "goto_tab('contrast')",    "Contrast"),
-        Binding("5",     "goto_tab('presets')",     "Presets"),
-        Binding("left",  "decrease",               "−",          show=False),
-        Binding("right", "increase",               "+",          show=False),
-        Binding("h",     "decrease",               "−",          show=False),
-        Binding("l",     "increase",               "+",          show=False),
-        Binding("r",     "reset_current",          "Reset"),
-        Binding("R",     "reset_all",              "Reset All"),
-        Binding("q",     "quit",                   "Quit"),
+        Binding("j",     "focus_next_slider",  "Focus next",  show=False),
+        Binding("k",     "focus_prev_slider",  "Focus prev",  show=False),
+        Binding("left",  "decrease",           "-",           show=False),
+        Binding("right", "increase",           "+",           show=False),
+        Binding("h",     "decrease",           "-",           show=False),
+        Binding("l",     "increase",           "+",           show=False),
+        Binding("r",     "reset_current",      "Reset"),
+        Binding("R",     "reset_all",          "Reset All"),
+        Binding("d",     "save_day",           "Save Day"),
+        Binding("n",     "save_night",         "Save Night"),
+        Binding("p",     "apply_preset",       "Apply"),
+        Binding("a",     "toggle_auto",        "Auto"),
+        Binding("q",     "quit",               "Quit"),
     ]
 
-    settings   : reactive[dict] = reactive({}, init=False)
-    active_tab : reactive[str]  = reactive("brightness")
+    settings : reactive[dict] = reactive({}, init=False)
+    _focused_slider_idx: int = 0
+    _city_candidates: list = []
 
     def compose(self) -> ComposeResult:
-        yield Header(show_clock=False)
-        with TabbedContent(initial="brightness"):
-            with TabPane("☀  Brightness", id="brightness"):
-                with Vertical(classes="slider-pane"):
-                    yield Label("", id="val-brightness", classes="val-label")
-                    yield SliderBar(id="bar-brightness")
-                    yield Label("", id="desc-brightness", classes="note-label")
+        with Vertical(id="main"):
+            yield Static("heli  --  display control", id="app-title")
 
-            with TabPane("🌡  Temperature", id="temperature"):
-                with Vertical(classes="slider-pane"):
-                    yield Label("", id="val-temperature", classes="val-label")
-                    yield SliderBar(id="bar-temperature")
-                    yield Label("Kelvin — lower = warmer, higher = cooler", classes="note-label")
+            for key, label, mn, mx, step, accent in SLIDER_DEFS:
+                yield SliderRow(key, label, mn, mx, step, accent, id=f"row-{key}")
 
-            with TabPane("🎨  Saturation", id="saturation"):
-                with Vertical(classes="slider-pane"):
-                    yield Label("", id="val-saturation", classes="val-label")
-                    yield SliderBar(id="bar-saturation")
+            with Vertical(id="presets-section"):
+                with Horizontal(id="presets-row"):
+                    yield Label("Day:", classes="preset-item")
+                    yield Label("", id="day-preview", classes="preset-val")
+                    yield Label("Night:", classes="preset-item")
+                    yield Label("", id="night-preview", classes="preset-val")
+                    yield Label("[ d ] Day  [ n ] Night  [ p ] Apply", id="preset-keys")
+
+            with Vertical(id="city-section"):
+                with Horizontal(id="city-row"):
+                    yield Label("City:", id="city-label")
+                    yield Input(placeholder="type to search...", id="city-input")
+                yield ListView(id="city-results")
+                yield Label("", id="location-status")
+                if not _ASTRAL:
                     yield Label(
-                        "Simulated via gamma + temperature blend", classes="note-label"
+                        "! astral not installed: pip install astral",
+                        id="astral-missing",
                     )
-
-            with TabPane("◑  Contrast", id="contrast"):
-                with Vertical(classes="slider-pane"):
-                    yield Label("", id="val-contrast", classes="val-label")
-                    yield SliderBar(id="bar-contrast")
-                    yield Label("Simulated via gamma offset", classes="note-label")
-
-            with TabPane("⚙  Presets", id="presets"):
-                with Vertical(classes="presets-pane"):
-                    with Horizontal(classes="preset-row"):
-                        yield Label("Day preset:", classes="preset-label")
-                        yield Label("", id="day-preview", classes="preset-val")
-                    with Horizontal(classes="preset-row"):
-                        yield Label("Night preset:", classes="preset-label")
-                        yield Label("", id="night-preview", classes="preset-val")
-                    with Horizontal(classes="preset-row"):
-                        yield Static("Save current as:", classes="preset-label")
-                        yield Static(
-                            "[ d ] Day   [ n ] Night", classes="preset-val"
-                        )
-                    yield Label("City / location for auto Day↔Night switching:", classes="note-label")
-                    yield Input(placeholder="Type city name…", id="city-input")
-                    yield ListView(id="city-results")
-                    yield Label("", id="location-status")
-                    if not _ASTRAL:
-                        yield Label(
-                            "⚠  Install astral for city search: pip install astral",
-                            id="astral-missing",
-                        )
 
         yield Static(CHEATSHEET, id="cheatsheet")
 
     def on_mount(self) -> None:
         self.settings = load_settings()
         apply_all(self.settings)
-        self._refresh_all_bars(self.settings)
-        self._refresh_presets_tab(self.settings)
+        self._refresh_ui(self.settings)
+        # hide city list initially
+        self.query_one("#city-results", ListView).display = False
+        # focus first slider
+        self._focus_slider(0)
         self._start_auto_switch()
 
-    # ── reactive watcher ───────────────────────────────────────────────────────
     def watch_settings(self, s: dict) -> None:
-        self._refresh_all_bars(s)
-        self._refresh_presets_tab(s)
+        self._refresh_ui(s)
 
-    def _refresh_all_bars(self, s: dict) -> None:
-        _bar_cfg = [
-            ("bar-brightness",  "val-brightness",  s["gamma"],
-             GAMMA_MIN, GAMMA_MAX, TAB_COLORS["brightness"],
-             f"{s['gamma']}%  —  {_describe_gamma(s['gamma'])}"),
-            ("bar-temperature", "val-temperature",  s["temperature"],
-             TEMP_MIN, TEMP_MAX, TAB_COLORS["temperature"],
-             f"{s['temperature']} K"),
-            ("bar-saturation",  "val-saturation",  s["saturation"],
-             SAT_MIN, SAT_MAX, TAB_COLORS["saturation"],
-             f"{s['saturation']}%"),
-            ("bar-contrast",    "val-contrast",    s["contrast"],
-             CONTRAST_MIN, CONTRAST_MAX, TAB_COLORS["contrast"],
-             f"{s['contrast']:+d}"),
-        ]
-        for bar_id, lbl_id, val, mn, mx, color, text in _bar_cfg:
+    def _refresh_ui(self, s: dict) -> None:
+        for key, _label, mn, mx, step, accent in SLIDER_DEFS:
             try:
-                bar = self.query_one(f"#{bar_id}", SliderBar)
-                bar.min_val = float(mn)
-                bar.max_val = float(mx)
-                bar.value   = float(val)
-                bar.accent  = color
-                self.query_one(f"#{lbl_id}", Label).update(text)
+                row = self.query_one(f"#row-{key}", SliderRow)
+                row.update_display(s[key], s)
             except Exception:
                 pass
+        self._refresh_presets(s)
+        self._refresh_status(s)
 
-    def _refresh_presets_tab(self, s: dict) -> None:
-        def _fmt(p: dict) -> str:
-            return (
-                f"γ {p['gamma']}  {p['temperature']}K  "
-                f"sat {p['saturation']}%  con {p['contrast']:+d}"
-            )
+    def _refresh_presets(self, s: dict) -> None:
         try:
-            self.query_one("#day-preview",   Label).update(_fmt(s["presets"]["day"]))
-            self.query_one("#night-preview", Label).update(_fmt(s["presets"]["night"]))
+            self.query_one("#day-preview",   Label).update(_fmt_preset(s["presets"]["day"]))
+            self.query_one("#night-preview", Label).update(_fmt_preset(s["presets"]["night"]))
         except Exception:
             pass
-        loc = make_location(s)
+
+    def _refresh_status(self, s: dict) -> None:
         try:
-            status_lbl = self.query_one("#location-status", Label)
+            lbl = self.query_one("#location-status", Label)
+            auto = s.get("auto_switch", True)
+            auto_str = "auto:ON" if auto else "auto:OFF"
+            loc = make_location(s)
             if loc:
                 try:
                     sr, ss = get_sun_times(loc)
-                    day = is_daytime(loc)
-                    phase = "Day" if day else "Night"
-                    status_lbl.update(
-                        f"📍 {s.get('city','custom')} — {phase}  "
-                        f"(↑ {sr.strftime('%H:%M')}  ↓ {ss.strftime('%H:%M')})"
+                    phase = "Day" if is_daytime(loc) else "Night"
+                    city = s.get("city", "custom")
+                    lbl.update(
+                        f"{auto_str}  {city} -- {phase}"
+                        f"  (^ {sr.strftime('%H:%M')}  v {ss.strftime('%H:%M')})"
                     )
                 except Exception:
-                    status_lbl.update(f"📍 {s.get('city','custom')} — sun times unavailable")
+                    lbl.update(f"{auto_str}  {s.get('city','custom')} -- sun times unavailable")
             elif s.get("city") or s.get("lat") is not None:
-                status_lbl.update("⚠  Location not found in database")
+                lbl.update(f"{auto_str}  Location not found in database")
             else:
-                status_lbl.update("No location set — auto-switch disabled")
+                lbl.update(f"{auto_str}  No location set")
         except Exception:
             pass
 
@@ -441,46 +503,66 @@ class HeliApp(App):
         save_settings(new)
         apply_all(new)
 
-    # ── tab navigation ─────────────────────────────────────────────────────────
-    def action_next_tab(self) -> None:
-        order = ["brightness", "temperature", "saturation", "contrast", "presets"]
-        try:
-            tc = self.query_one(TabbedContent)
-            idx = (order.index(tc.active) + 1) % len(order)
-            tc.active = order[idx]
-        except Exception:
-            pass
+    # ── slider focus ───────────────────────────────────────────────────────────
+    def _slider_rows(self) -> list[SliderRow]:
+        return [self.query_one(f"#row-{key}", SliderRow) for key, *_ in SLIDER_DEFS]
 
-    def action_goto_tab(self, tab: str) -> None:
-        try:
-            self.query_one(TabbedContent).active = tab
-        except Exception:
-            pass
+    def _focus_slider(self, idx: int) -> None:
+        rows = self._slider_rows()
+        if 0 <= idx < len(rows):
+            self._focused_slider_idx = idx
+            rows[idx].focus()
 
-    def on_tabbed_content_tab_activated(self, event: TabbedContent.TabActivated) -> None:
-        if event.pane:
-            self.active_tab = event.pane.id
+    def _input_focused(self) -> bool:
+        return isinstance(self.focused, Input)
+
+    def action_focus_next_slider(self) -> None:
+        if self._input_focused():
+            return
+        rows = self._slider_rows()
+        self._focus_slider((self._focused_slider_idx + 1) % len(rows))
+
+    def action_focus_prev_slider(self) -> None:
+        if self._input_focused():
+            return
+        rows = self._slider_rows()
+        self._focus_slider((self._focused_slider_idx - 1) % len(rows))
+
+    def on_slider_row_focus(self, event) -> None:
+        rows = self._slider_rows()
+        for i, row in enumerate(rows):
+            if row is event.widget:
+                self._focused_slider_idx = i
+                break
 
     # ── slider actions ─────────────────────────────────────────────────────────
+    def _current_slider_def(self):
+        if self._input_focused():
+            return None
+        rows = self._slider_rows()
+        if not (0 <= self._focused_slider_idx < len(rows)):
+            return None
+        return SLIDER_DEFS[self._focused_slider_idx]
+
     def action_increase(self) -> None:
-        cfg = _TAB_KEYS.get(self.active_tab)
-        if cfg is None:
+        d = self._current_slider_def()
+        if d is None:
             return
-        key, mn, mx, step = cfg
+        key, _lbl, mn, mx, step, _c = d
         self._update_setting(key, min(mx, self.settings[key] + step))
 
     def action_decrease(self) -> None:
-        cfg = _TAB_KEYS.get(self.active_tab)
-        if cfg is None:
+        d = self._current_slider_def()
+        if d is None:
             return
-        key, mn, mx, step = cfg
+        key, _lbl, mn, mx, step, _c = d
         self._update_setting(key, max(mn, self.settings[key] - step))
 
     def action_reset_current(self) -> None:
-        cfg = _TAB_KEYS.get(self.active_tab)
-        if cfg is None:
+        d = self._current_slider_def()
+        if d is None:
             return
-        key = cfg[0]
+        key = d[0]
         self._update_setting(key, DEFAULTS[key])
 
     def action_reset_all(self) -> None:
@@ -493,30 +575,37 @@ class HeliApp(App):
         save_settings(new)
         apply_all(new)
 
-    # ── preset key bindings (d / n to save) ───────────────────────────────────
-    def on_key(self, event) -> None:
-        if self.active_tab != "presets":
+    # ── preset actions ─────────────────────────────────────────────────────────
+    def action_save_day(self) -> None:
+        if self._input_focused():
             return
-        if event.key == "d":
-            self.settings = save_current_as_preset(self.settings, "day")
-            save_settings(self.settings)
-            self._refresh_presets_tab(self.settings)
-        elif event.key == "n":
-            self.settings = save_current_as_preset(self.settings, "night")
-            save_settings(self.settings)
-            self._refresh_presets_tab(self.settings)
-        elif event.key == "p":
-            loc = make_location(self.settings)
-            if loc:
-                which = "day" if is_daytime(loc) else "night"
-                new = apply_preset(self.settings, which)
-                self.settings = new
-                save_settings(new)
-                apply_all(new)
+        self.settings = save_current_as_preset(self.settings, "day")
+        save_settings(self.settings)
+
+    def action_save_night(self) -> None:
+        if self._input_focused():
+            return
+        self.settings = save_current_as_preset(self.settings, "night")
+        save_settings(self.settings)
+
+    def action_apply_preset(self) -> None:
+        if self._input_focused():
+            return
+        loc = make_location(self.settings)
+        if loc:
+            which = "day" if is_daytime(loc) else "night"
+            new = apply_preset(self.settings, which)
+            self.settings = new
+            save_settings(new)
+            apply_all(new)
+
+    def action_toggle_auto(self) -> None:
+        if self._input_focused():
+            return
+        new_val = not self.settings.get("auto_switch", True)
+        self._update_setting("auto_switch", new_val)
 
     # ── city search ────────────────────────────────────────────────────────────
-    _city_candidates: list = []
-
     def on_input_changed(self, event: Input.Changed) -> None:
         if event.input.id != "city-input":
             return
@@ -525,18 +614,27 @@ class HeliApp(App):
         try:
             lv = self.query_one("#city-results", ListView)
             lv.clear()
-            for name, region, lat, lon in results:
-                lv.append(ListItem(Label(f"{name}, {region}  ({lat:.2f}°, {lon:.2f}°)")))
+            if results:
+                for name, region, lat, lon in results:
+                    lv.append(ListItem(Label(f"{name}, {region}  ({lat:.2f}, {lon:.2f})")))
+                lv.display = True
+            else:
+                lv.display = False
         except Exception:
             pass
 
     def on_list_view_selected(self, event: ListView.Selected) -> None:
         try:
             idx = list(self.query_one("#city-results", ListView).children).index(event.item)
-            name, region, lat, lon = self._city_candidates[idx]
+            name, _region, lat, lon = self._city_candidates[idx]
             new = {**self.settings, "city": name, "lat": lat, "lon": lon}
             self.settings = new
             save_settings(new)
+            # hide list, clear input, refocus first slider
+            lv = self.query_one("#city-results", ListView)
+            lv.display = False
+            self.query_one("#city-input", Input).value = ""
+            self._focus_slider(self._focused_slider_idx)
             self._start_auto_switch()
         except Exception:
             pass
@@ -553,6 +651,8 @@ class HeliApp(App):
                 time.sleep(1)
 
     def _check_and_switch(self) -> None:
+        if not self.settings.get("auto_switch", True):
+            return
         loc = make_location(self.settings)
         if loc is None:
             return
@@ -565,17 +665,6 @@ class HeliApp(App):
         self.settings = new
         save_settings(new)
         apply_all(new)
-
-
-# ── HELPERS ───────────────────────────────────────────────────────────────────
-def _describe_gamma(val: int) -> str:
-    if val <= 100:
-        return "Normal"
-    if val <= 130:
-        return "Comfortable"
-    if val <= 170:
-        return "Bright"
-    return "Maximum"
 
 
 # ── ENTRY POINT ───────────────────────────────────────────────────────────────
