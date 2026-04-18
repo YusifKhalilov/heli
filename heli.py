@@ -48,7 +48,7 @@ DEFAULTS: dict = {
 }
 
 CHEATSHEET = (
-    "j/k focus  h/l adjust  r reset  R reset all  d/n save preset  p apply  a toggle auto  q quit"
+    "j/k focus  h/l adjust  r reset  R reset all  d/n save preset  p apply  a toggle auto (restores on off)  q quit"
 )
 
 
@@ -412,6 +412,7 @@ class HeliApp(App):
     settings : reactive[dict] = reactive({}, init=False)
     _focused_slider_idx: int = 0
     _city_candidates: list = []
+    _pre_auto_settings: dict | None = None
 
     def compose(self) -> ComposeResult:
         with Vertical(id="main"):
@@ -603,7 +604,16 @@ class HeliApp(App):
         if self._input_focused():
             return
         new_val = not self.settings.get("auto_switch", True)
-        self._update_setting("auto_switch", new_val)
+        if not new_val and self._pre_auto_settings is not None:
+            # restore state from before auto took over
+            restored = {**self._pre_auto_settings, "auto_switch": False}
+            self._pre_auto_settings = None
+            self.settings = restored
+            save_settings(restored)
+            apply_all(restored)
+        else:
+            self._pre_auto_settings = None  # reset snapshot for new auto session
+            self._update_setting("auto_switch", new_val)
 
     # ── city search ────────────────────────────────────────────────────────────
     def on_input_changed(self, event: Input.Changed) -> None:
@@ -661,6 +671,9 @@ class HeliApp(App):
         except Exception:
             return
         which = "day" if day else "night"
+        # snapshot before auto overwrites sliders (only once per auto session)
+        if self._pre_auto_settings is None:
+            self._pre_auto_settings = copy.deepcopy(self.settings)
         new = apply_preset(copy.deepcopy(self.settings), which)
         self.settings = new
         save_settings(new)
